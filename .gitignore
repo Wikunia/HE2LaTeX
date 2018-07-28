@@ -2,3 +2,4 @@
 *.zip
 normalized
 formulas
+*/__pycache__
