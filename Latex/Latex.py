@@ -46,9 +46,35 @@ class Latex(object):
         self.seq_sess = tf.Session()
         self.seqModel.restore(self.seq_sess)
 
+    def train(self, train_images, train_labels, steps):
+        """ Further train the network
+
+        Parameters
+        ----------
+        train_images : numpy array [X,48,48]
+            Already normalized train images (-mean /std)
+        train_labels : numpy array [X]
+            Train labels (integer) coresponding to the train images 
+        steps: 
+            Number of steps for training
+        """
+        
+        train_input_fn = tf.estimator.inputs.numpy_input_fn(
+            x = {"x": train_images},
+            y = train_labels,
+            batch_size = 500,
+            num_epochs = None,
+            shuffle = True
+        )
+        self.classifier.train(
+            input_fn = train_input_fn,
+            steps = steps,
+        )
+
     def normalize_single(self, symbol):
         symbol = np.copy(symbol).astype(np.float32)
 
+        # range 0-1
         symbol /= np.max(symbol)
         
         rows, cols = symbol.shape
@@ -133,63 +159,6 @@ class Latex(object):
         crop = crop[top:bottom,:]*255
         return crop
 
-    def seq_model_fn(self, features, labels, mode):
-        x_seq_length = 26
-        nxchars = 30
-        y_seq_length = 25
-
-        batch_size = 512
-        nodes = 64
-        embed_size = 20
-
-        inputs = features["inputs"]
-        outputs = labels[:, :-1]
-        targets = labels[:, 1:]
-
-        # Embedding layers
-        output_embedding = tf.Variable(tf.random_uniform((len(ltokens)+1, embed_size), -1.0, 1.0), name='dec_embedding')
-        date_output_embed = tf.nn.embedding_lookup(output_embedding, outputs)
-
-        with tf.variable_scope("encoding") as encoding_scope:
-            lstm_enc = tf.contrib.rnn.BasicLSTMCell(nodes)
-            _, last_state = tf.nn.dynamic_rnn(lstm_enc, inputs=inputs, dtype=tf.float32)
-
-        with tf.variable_scope("decoding") as decoding_scope:
-            lstm_dec = tf.contrib.rnn.BasicLSTMCell(nodes)
-            dec_outputs, _ = tf.nn.dynamic_rnn(lstm_dec, inputs=date_output_embed, initial_state=last_state)
-        #connect outputs to 
-        logits = tf.contrib.layers.fully_connected(dec_outputs, num_outputs=len(ltokens)+1, activation_fn=None) 
-        
-        predictions = {
-            # generate predictions (for PREDICT and EVAL mode)
-            "classes": tf.argmax(input=logits, axis=1),
-            # Add `softmax_tensor` to the graph. It is used for PREDICT and by the
-            # `logging_hook`
-            "probabilities": tf.nn.softmax(logits, name="softmax_tensor")
-        }
-        
-        if mode == tf.estimator.ModeKeys.PREDICT:
-            return tf.estimator.EstimatorSpec(mode=mode,predictions=predictions)
-        
-        onehot_labels = tf.one_hot(indices=tf.cast(labels, tf.int32), depth=self.nof_labels)
-        # Loss function
-        loss = tf.contrib.seq2seq.sequence_loss(logits, targets, tf.ones([batch_size, y_seq_length]))
-        
-        if mode == tf.estimator.ModeKeys.TRAIN:
-            # Optimizer
-            optimizer = tf.train.RMSPropOptimizer(1e-3).minimize(loss)
-            train_op = optimizer.minimize(
-                loss = loss,
-                global_step=tf.train.get_global_step()
-            )
-            return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
-        
-        eval_metric_ops = {
-            "accuracy": np.mean(logits.argmax(axis=-1) == target_batch[:,1:])
-        }
-        return tf.estimator.EstimatorSpec(mode=mode, loss=loss, eval_metric_ops=eval_metric_ops)
-
-
     def cnn_model_fn(self, features, labels, mode):
         input_layer = tf.reshape(features["x"], [-1,48,48,1])
         
@@ -243,14 +212,10 @@ class Latex(object):
             training=mode == tf.estimator.ModeKeys.TRAIN
         )
         
-        # units = number of symbols
         logits = tf.layers.dense(inputs=dropout, units=self.nof_labels)
         
         predictions = {
-            # generate predictions (for PREDICT and EVAL mode)
             "classes": tf.argmax(input=logits, axis=1),
-            # Add `softmax_tensor` to the graph. It is used for PREDICT and by the
-            # `logging_hook`
             "probabilities": tf.nn.softmax(logits, name="softmax_tensor")
         }
         
@@ -291,6 +256,7 @@ class Latex(object):
         id_c = 0
         for cnt in contours:
             x,y,w,h = cv2.boundingRect(cnt)
+            # bounding boxes should not be too small
             if h > 10 or w > 10:
                 bounding_boxes.append({
                     'id': id_c,
@@ -309,48 +275,7 @@ class Latex(object):
             plt.imshow(formula_rects, cmap="gray")
             plt.show()
 
-        """
-        # combine bounding boxes if horizontal overlap
-        new_bounding_boxes = copy.deepcopy(bounding_boxes)
-        for i in range(len(bounding_boxes)-1):
-            bbi = bounding_boxes[i]
-            bbi2 = bounding_boxes[i+1]
-            if bbi['xmax'] >= bbi2['xmin'] >= bbi['xmin']:
-                xmin = bbi['xmin']
-                xmax = bbi['xmax'] if bbi['xmax'] > bbi2['xmax'] else bbi2['xmax']
-                ymin = bbi['ymin'] if bbi['ymin'] < bbi2['ymin'] else bbi2['ymin']
-                ymax = bbi['ymax'] if bbi['ymax'] > bbi2['ymax'] else bbi2['ymax']
-                new_bb = {
-                    'id'  : id_c,
-                    'xmin': xmin,
-                    'xmax': xmax,
-                    'ymin': ymin,
-                    'ymax': ymax,
-                    'combined': [bbi['id'],bbi2['id']]
-                }
-                new_bounding_boxes = [new_bb]  + new_bounding_boxes
-                id_c += 1
-
-        # is stable sorted so that combined is always before single
-        self.bounding_boxes = sorted(new_bounding_boxes, key=lambda k: k['xmin']) 
-
-        # remove bounding boxes smaller than width < 10 and height < 10
-        bounding_boxes = []
-        for i in range(len(self.bounding_boxes)):
-            if self.bounding_boxes[i]['xmax'] - self.bounding_boxes[i]['xmin'] < 10 and self.bounding_boxes[i]['ymax'] - self.bounding_boxes[i]['ymin'] < 10:
-                continue
-            bounding_boxes.append(self.bounding_boxes[i])
-        
-       
-        """
         self.bounding_boxes = bounding_boxes    
-
-        formula_rects = self.add_rectangles(self.formula, self.bounding_boxes)
-        if self.plotting:
-            print("Final bounding boxes: ")
-            plt.figure(figsize=(20,10))  
-            plt.imshow(formula_rects)
-            plt.show()
 
     def normalize(self):
         self.possible_symbol_img = []
@@ -389,48 +314,31 @@ class Latex(object):
 
         lastYmin = None
         lastYmax = None
-        for pred_result,pos in zip(pred_results,pred_pos):
-        #     print(pred_result['classes'])
-            
-            if pos['id'] in skip:
-                c += 1
-                continue
-                
+        for pred_result,pos in zip(pred_results,pred_pos):              
             symbol_no = pred_result['classes']
             symbol = self.label_names[symbol_no]
             acc = pred_result['probabilities'][symbol_no]
             if self.verbose:
                 print("Recognized a %s with %.2f %% accuracy" % (symbol,acc*100))
             
-            if acc > 0.0:
-                xmin, xmax = pos['xmin'],pos['xmax']
-                ymin, ymax = pos['ymin'],pos['ymax']
-                
-                """
-                if len(pos['combined']):
-                    # if the network is pretty sure about this combined match we don't have to check the single parts
-                    if acc > 0.9:
-                        skip.extend(pos['combined'])
-                    else:
-                        # TODO: take the most likely out of the combined and the single
-                        skip.extend(pos['combined'])
-                """
+            xmin, xmax = pos['xmin'],pos['xmax']
+            ymin, ymax = pos['ymin'],pos['ymax']
+            
+            good_bounding_boxes.append({
+                'xmin': xmin,
+                'xmax': xmax,
+                'ymin': ymin,
+                'ymax': ymax,
+                'symbol': symbol,
+                'probs': pred_result['probabilities']
+            })
+            formula_text += symbol
+            
+            lastYmax = ymax
+            lastYmin = ymin
+            c += 1
 
-                good_bounding_boxes.append({
-                    'xmin': xmin,
-                    'xmax': xmax,
-                    'ymin': ymin,
-                    'ymax': ymax,
-                    'symbol': symbol,
-                    'probs': pred_result['probabilities']
-                })
-                formula_text += symbol
-               
-                lastYmax = ymax
-                lastYmin = ymin
-                c += 1
-
-        seq_data = self.get_sequence_data(good_bounding_boxes)
+        seq_data = self.seqModel.get_sequence_data(self.formula, self.nof_labels, good_bounding_boxes)
 
         bb_image = self.add_rectangles(formula, good_bounding_boxes)
         
@@ -438,28 +346,6 @@ class Latex(object):
 
         return {'equation': seq, 'seq_data': seq_data, 'formula': self.post_process_latex(formula_text), 'output_image': bb_image, 'data': good_bounding_boxes}
     
-    def get_sequence_data(self, bb):
-        height, width = self.formula.shape
-        last_xmax = 0
-        last_ymin = bb[0]['ymin']
-        step_c = -1
-        nlabels = self.nof_labels
-        nclasses = nlabels+4+2+1 # 1 for pad and 4 for relative pos, 2 for abs pos and shift from last and width
-        seq = np.zeros((30,nclasses))
-        for step in bb:
-            step_c += 1
-            seq[step_c][:nlabels] = step['probs']
-            seq[step_c][-1] = 0 # remove pad
-            seq[step_c][-7] = step['xmin']/width
-            seq[step_c][-6] = step['ymin']/height
-            seq[step_c][-5] = (step['xmin']-last_xmax)/10
-            last_xmax = step['xmax']
-            seq[step_c][-4] = (step['xmax']-step['xmin'])/48
-            seq[step_c][-3] = (step['ymin']-last_ymin)/10
-            seq[step_c][-2] = (step['ymax']-step['ymin'])/48
-            last_ymin = step['ymin']
-        return seq
-
     def post_process_latex(self, formula_text):
         formula_text = formula_text.replace("=", " = ")
         for symbol in ["leq","neq","geq"]:
@@ -480,6 +366,7 @@ class Latex(object):
         return correct
 
     def filename2seq(self, filename):
+        """ Convert a filename to the sequence array """
         pos = filename.rfind("_")
         correct = filename[:pos]
         parts = list(correct)

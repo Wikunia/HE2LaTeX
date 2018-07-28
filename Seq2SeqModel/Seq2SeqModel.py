@@ -27,9 +27,7 @@ class Seq2SeqModel(object):
         targets = tf.placeholder(tf.int32, (None, None), 'targets')
 
         # Embedding layers
-        # input_embedding = tf.Variable(tf.random_uniform((len(char2numX), embed_size), -1.0, 1.0), name='enc_embedding')
         output_embedding = tf.Variable(tf.random_uniform((len(self.ltokens)+1, embed_size), -1.0, 1.0), name='dec_embedding')
-        # date_input_embed = tf.nn.embedding_lookup(input_embedding, inputs)
         date_output_embed = tf.nn.embedding_lookup(output_embedding, outputs)
 
         with tf.variable_scope("encoding") as encoding_scope:
@@ -80,4 +78,25 @@ class Seq2SeqModel(object):
             if c < len(self.ltokens):
                 seq += self.ltokens[c] 
                 
+        return seq
+
+    def get_sequence_data(self, formula, nlabels, bb):
+        height, width = formula.shape
+        last_xmax = 0
+        last_ymin = bb[0]['ymin']
+        step_c = -1
+        nclasses = nlabels+4+2+1 # 1 for pad and 4 for relative pos, 2 for abs pos and shift from last and width
+        seq = np.zeros((30,nclasses))
+        for step in bb:
+            step_c += 1
+            seq[step_c][:nlabels] = step['probs']
+            seq[step_c][-1] = 0 # remove pad
+            seq[step_c][-7] = step['xmin']/width
+            seq[step_c][-6] = step['ymin']/height
+            seq[step_c][-5] = (step['xmin']-last_xmax)/10
+            last_xmax = step['xmax']
+            seq[step_c][-4] = (step['xmax']-step['xmin'])/48
+            seq[step_c][-3] = (step['ymin']-last_ymin)/10
+            seq[step_c][-2] = (step['ymax']-step['ymin'])/48
+            last_ymin = step['ymin']
         return seq
