@@ -1,6 +1,6 @@
 # download all files necessary for training
 import requests, os, zipfile
-base_url = "http://212.47.252.141:81/HE2LaTeX/"
+base_url = "http://159.69.28.157/HE2LaTeX/"
 
 files = ["train_images.npy", "train_labels.npy", "test_images.npy", "test_labels.npy", "iseq_n.npy", "oseq_n.npy", "normalized.zip", "formulas.zip"]
 
