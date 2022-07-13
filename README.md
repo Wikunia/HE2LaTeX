@@ -1,6 +1,6 @@
 # HE2LaTeX
 
-**Not supported anymore*"
+**Not supported anymore**
 I can't support this project anymore with the necessary download files as they are too huge for my small server.
 
 
