@@ -1,5 +1,9 @@
 # HE2LaTeX
 
+**Not supported anymore*"
+I can't support this project anymore with the necessary download files as they are too huge for my small server.
+
+
 The main goal of this repository is to provide a framework of constructing LaTeX equations out of handwritten images.
 
 Converting this:
